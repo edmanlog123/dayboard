@@ -1,0 +1,17 @@
+name: DayBoard
+options:
+  bundleIdPrefix: com.dayboard
+targets:
+  DayBoard:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: client
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.dayboard.demo
+      INFOPLIST_FILE: client/Info.plist
+    scheme:
+      testTargets: []
+
+
