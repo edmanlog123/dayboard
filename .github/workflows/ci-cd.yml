@@ -1,0 +1,217 @@
+name: DayBoard CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Test and Lint
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [backend, document-processor]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Go (for backend)
+      if: matrix.service == 'backend'
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Setup Java (for document-processor)
+      if: matrix.service == 'document-processor'
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'eclipse-temurin'
+
+    # Backend Tests
+    - name: Run Go tests
+      if: matrix.service == 'backend'
+      run: |
+        cd backend
+        go mod tidy
+        go test ./... -v
+        go vet ./...
+        
+    # Java Tests
+    - name: Run Java tests
+      if: matrix.service == 'document-processor'
+      run: |
+        cd document-processor
+        mvn clean test
+        mvn checkstyle:check
+
+  # Security Scanning
+  security:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # Build and Push Docker Images
+  build:
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    permissions:
+      contents: read
+      packages: write
+      
+    strategy:
+      matrix:
+        service: [backend, document-processor]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.service }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./${{ matrix.service }}
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # Integration Tests
+  integration-test:
+    runs-on: ubuntu-latest
+    needs: build
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: dayboard_test
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_pass
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Start services with Docker Compose
+      run: |
+        cp .env.example .env
+        echo "DATABASE_URL=postgresql://test_user:test_pass@localhost:5432/dayboard_test" >> .env
+        echo "DEMO_MODE=true" >> .env
+        docker-compose up -d --build
+
+    - name: Wait for services to be ready
+      run: |
+        timeout 60s bash -c 'until curl -f http://localhost:8080/healthz; do sleep 2; done'
+        timeout 60s bash -c 'until curl -f http://localhost:8081/actuator/health; do sleep 2; done'
+
+    - name: Run integration tests
+      run: |
+        # Test backend endpoints
+        curl -f http://localhost:8080/api/v1/agenda/today?user_id=00000000-0000-0000-0000-000000000000
+        curl -f http://localhost:8080/api/v1/subs?user_id=00000000-0000-0000-0000-000000000000
+        curl -f http://localhost:8080/api/v1/daily/burn
+        
+        # Test document processor
+        curl -f http://localhost:8081/actuator/health
+
+    - name: Cleanup
+      if: always()
+      run: docker-compose down -v
+
+  # Deploy to staging
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: integration-test
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    
+    steps:
+    - name: Deploy to staging
+      run: |
+        echo "🚀 Deploying to staging environment"
+        # Add your staging deployment commands here
+        # e.g., deploy to Railway, Render, or your preferred platform
+
+  # Deploy to production
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: integration-test
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - name: Deploy to production
+      run: |
+        echo "🚀 Deploying to production environment"
+        # Add your production deployment commands here
+        # e.g., deploy to Fly.io, AWS, or your preferred platform
+
+  # iOS Build (Optional)
+  ios-build:
+    runs-on: macos-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+
+    - name: Build iOS App
+      run: |
+        cd client
+        xcodebuild -project DayBoard.xcodeproj -scheme DayBoard -configuration Release clean build
+        echo "📱 iOS app built successfully"

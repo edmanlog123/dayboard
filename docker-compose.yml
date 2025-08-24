@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: dayboard
+      POSTGRES_USER: dayboard_user
+      POSTGRES_PASSWORD: dayboard_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dayboard_user -d dayboard"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dayboard-network
+
+  # Go Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - PORT=8080
+      - DATABASE_URL=postgresql://dayboard_user:dayboard_pass@postgres:5432/dayboard?sslmode=disable
+      - DEMO_MODE=false
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-demo_client_id}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-demo_client_secret}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:8080/auth/google/callback}
+      - PLAID_CLIENT_ID=${PLAID_CLIENT_ID:-demo_plaid_id}
+      - PLAID_SECRET=${PLAID_SECRET:-demo_plaid_secret}
+      - PLAID_ENV=${PLAID_ENV:-sandbox}
+      - PLAID_REDIRECT_URI=${PLAID_REDIRECT_URI:-http://localhost:8080/auth/plaid/callback}
+      - MAPS_API_KEY=${MAPS_API_KEY:-demo_maps_key}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-demo_gemini_key}
+      - JWT_SECRET=${JWT_SECRET:-demo_jwt_secret_change_in_production}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dayboard-network
+
+  # Java Document Processor Microservice
+  document-processor:
+    build:
+      context: ./document-processor
+      dockerfile: Dockerfile
+    environment:
+      - SERVER_PORT=8081
+      - SPRING_PROFILES_ACTIVE=docker
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dayboard-network
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dayboard-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  dayboard-network:
+    driver: bridge
