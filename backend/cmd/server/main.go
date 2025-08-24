@@ -12,9 +12,13 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"dayboard/backend/internal/ai"
+	"dayboard/backend/internal/auth"
 	"dayboard/backend/internal/commute"
 	"dayboard/backend/internal/db"
 	"dayboard/backend/internal/estimate"
+	"dayboard/backend/internal/google"
+	"dayboard/backend/internal/plaid"
 	"dayboard/backend/internal/store"
 )
 
@@ -89,6 +93,34 @@ func main() {
 
 	// Mount API routes under /api/v1.
 	api := router.Group("/api/v1")
+
+	// Initialize JWT manager and auth handlers (works in both demo and production mode)
+	jwtManager := auth.NewJWTManager()
+
+	// Auth routes
+	authGroup := api.Group("/auth")
+
+	// Demo auth endpoints that return mock responses
+	authGroup.POST("/signup", func(c *gin.Context) {
+		c.JSON(http.StatusCreated, gin.H{
+			"token": "demo_jwt_token_for_testing",
+			"user": gin.H{
+				"id":    "demo-user-123",
+				"email": "demo@dayboard.app",
+				"name":  "Demo User",
+			},
+		})
+	})
+	authGroup.POST("/login", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"token": "demo_jwt_token_for_testing",
+			"user": gin.H{
+				"id":    "demo-user-123",
+				"email": "demo@dayboard.app",
+				"name":  "Demo User",
+			},
+		})
+	})
 
 	if demoMode {
 		// Seed demo data once at startup
@@ -330,6 +362,66 @@ func main() {
 		// Initialize DB connection. Fatal if cannot connect.
 		database := db.New()
 		defer database.Close()
+
+		// Initialize auth handlers for production
+		authHandlers := auth.NewAuthHandlers(database, jwtManager)
+		authGroup.POST("/signup", authHandlers.Signup)
+		authGroup.POST("/login", authHandlers.Login)
+		authGroup.GET("/profile", auth.AuthMiddleware(jwtManager), authHandlers.GetProfile)
+		authGroup.POST("/refresh", authHandlers.RefreshToken)
+
+		// Initialize OAuth handlers
+		googleHandlers := google.NewOAuthHandlers(database)
+		plaidHandlers := plaid.NewOAuthHandlers(database)
+		geminiService := ai.NewGeminiService()
+
+		// Google Calendar OAuth routes
+		googleGroup := api.Group("/google", auth.AuthMiddleware(jwtManager))
+		googleGroup.GET("/auth", googleHandlers.InitiateGoogleAuth)
+		googleGroup.GET("/callback", googleHandlers.HandleGoogleCallback)
+		googleGroup.POST("/sync", googleHandlers.SyncCalendarEvents)
+
+		// Plaid OAuth routes
+		plaidGroup := api.Group("/plaid", auth.AuthMiddleware(jwtManager))
+		plaidGroup.POST("/link-token", plaidHandlers.CreateLinkToken)
+		plaidGroup.POST("/exchange", plaidHandlers.ExchangePublicToken)
+		plaidGroup.POST("/sync", plaidHandlers.SyncTransactions)
+		plaidGroup.GET("/accounts", plaidHandlers.GetConnectedAccounts)
+
+		// AI Assistant route with real Gemini integration
+		api.POST("/ai/advice", auth.OptionalAuthMiddleware(jwtManager), func(c *gin.Context) {
+			var req struct {
+				Query string `json:"query" binding:"required"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+
+			// Get user context for personalized advice
+			userContext := make(map[string]interface{})
+			if userID, exists := auth.GetUserIDFromContext(c); exists {
+				// Get user profile for context
+				if profile, err := store.GetProfile(c.Request.Context(), database, userID); err == nil && profile != nil {
+					userContext["profile"] = map[string]interface{}{
+						"state":        profile.State,
+						"hourly_cents": profile.HourlyCents,
+					}
+				}
+				// Get subscriptions for context
+				if subs, err := store.GetSubscriptions(c.Request.Context(), database, userID); err == nil {
+					userContext["subscriptions"] = subs
+				}
+			}
+
+			advice, err := geminiService.GenerateAdvice(c.Request.Context(), req.Query, userContext)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate advice"})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{"advice": advice})
+		})
 
 		api.GET("/agenda/today", func(c *gin.Context) {
 			// In a production system you'd derive the user ID from the

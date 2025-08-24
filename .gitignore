@@ -1,4 +1,98 @@
-dayboardplan.md
-dayboardplan2.md
-dayboardplan3.md
-README2.md
+# 🔒 DayBoard Security - Ignore Sensitive Files
+
+# Environment Variables & Secrets
+*.env
+*.env.*
+.env.local
+.env.production
+.env.development
+backend/.env*
+secrets/
+config/secrets/
+
+# API Keys & Credentials
+*api-key*
+*secret*
+*credentials*
+*.pem
+*.key
+*.crt
+*.p12
+*.keystore
+
+# Database URLs & Connection Strings
+database.url
+db-config.*
+
+# OAuth Tokens & JWT Secrets
+oauth-tokens/
+jwt-secret*
+access-tokens/
+
+# Build Artifacts
+build/
+dist/
+target/
+*.app
+*.ipa
+*.dmg
+
+# Dependencies
+node_modules/
+vendor/
+Pods/
+
+# IDE Files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary Files
+tmp/
+temp/
+.cache/
+
+# Go
+go.sum
+
+# Java
+*.class
+*.jar
+*.war
+
+# Swift/iOS
+xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+DerivedData/
+
+# Docker
+.dockerignore
+
+# Testing
+coverage/
+.nyc_output/
+
+# Backup Files
+*.backup
+*.bak
+*.orig
+
+# System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
